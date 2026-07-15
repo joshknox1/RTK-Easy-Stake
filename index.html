@@ -20,6 +20,12 @@
   <button id="btn-settings" class="icon-btn" title="Settings" aria-label="Settings">&#9881;</button>
 </header>
 
+<div class="project-bar">
+  <button id="btn-project-switch" class="project-pill">
+    <span>&#128193;</span> <span id="project-pill-name">Project</span> <span class="caret">&#9662;</span>
+  </button>
+</div>
+
 <main>
   <!-- ===== SAVE TAB ===== -->
   <section id="tab-save" class="tab active">
@@ -56,6 +62,9 @@
   <!-- ===== MAP TAB ===== -->
   <section id="tab-map" class="tab">
     <div id="map"></div>
+    <button id="btn-map-recenter" class="map-fab map-fab-secondary" title="Recenter on me" aria-label="Recenter on me">&#8982;</button>
+    <button id="btn-map-add" class="map-fab" title="Drop pin here" aria-label="Drop pin here">+</button>
+    <p class="map-hint">Tap the map to place a point there, or use + for your current position.</p>
   </section>
 
   <!-- ===== LAYOUT TAB (design points imported from CAD, calibrated on site) ===== -->
@@ -172,6 +181,20 @@
   <p class="hint small" id="stakeout-note"></p>
   <div class="dialog-actions">
     <button type="button" id="stakeout-close" class="big-button small">Done</button>
+  </div>
+</dialog>
+
+<!-- ===== Project switcher modal ===== -->
+<dialog id="project-dialog">
+  <h2>Projects</h2>
+  <p class="hint small">Points and layout data are kept separate per project.</p>
+  <ul id="project-list" class="point-list"></ul>
+  <form id="new-project-form" class="dialog-actions" style="margin-top:14px;">
+    <input id="new-project-name" type="text" placeholder="New project name" required autocomplete="off" style="flex:1;">
+    <button type="submit" class="big-button small">Add</button>
+  </form>
+  <div class="dialog-actions" style="margin-top:10px;">
+    <button type="button" id="project-dialog-close" class="secondary-button">Close</button>
   </div>
 </dialog>
 

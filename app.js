@@ -10,6 +10,8 @@
 const STORAGE_KEY = 'rtk-points-v1';
 const BLE_SETTINGS_KEY = 'rtk-ble-settings-v1';
 const DESIGN_POINTS_KEY = 'rtk-design-points-v1';
+const PROJECTS_KEY = 'rtk-projects-v1';
+const CURRENT_PROJECT_KEY = 'rtk-current-project-v1';
 
 const FT_TO_M = 0.3048;
 const IN_TO_M = 0.0254;
@@ -38,6 +40,9 @@ let bleBuffer = '';
 let designPoints = loadDesignPoints();
 let stakeoutId = null;
 let stakeoutTimer = null;
+let projects = loadProjects();
+let currentProjectId = loadCurrentProjectId();
+let pendingSaveFix = null;
 
 // ----- storage -----
 function loadPoints() {
@@ -77,6 +82,60 @@ function loadDesignPoints() {
 
 function saveDesignPoints() {
   localStorage.setItem(DESIGN_POINTS_KEY, JSON.stringify(designPoints));
+}
+
+function loadProjects() {
+  try {
+    const raw = localStorage.getItem(PROJECTS_KEY);
+    return raw ? JSON.parse(raw) : [];
+  } catch {
+    return [];
+  }
+}
+
+function saveProjects() {
+  localStorage.setItem(PROJECTS_KEY, JSON.stringify(projects));
+}
+
+function loadCurrentProjectId() {
+  return localStorage.getItem(CURRENT_PROJECT_KEY) || null;
+}
+
+function saveCurrentProjectId() {
+  localStorage.setItem(CURRENT_PROJECT_KEY, currentProjectId);
+}
+
+// Ensures at least one project always exists and currentProjectId points at a
+// real one; folds in any pre-projects points/design points (from before this
+// feature existed) so nothing gets orphaned.
+function ensureProjects() {
+  if (projects.length === 0) {
+    const hasLegacyData = points.length > 0 || designPoints.length > 0;
+    const defaultProject = {
+      id: newId(),
+      name: hasLegacyData ? 'My Points' : 'Default Project',
+      createdAt: new Date().toISOString(),
+    };
+    projects.push(defaultProject);
+    points.forEach((p) => { if (!p.projectId) p.projectId = defaultProject.id; });
+    designPoints.forEach((p) => { if (!p.projectId) p.projectId = defaultProject.id; });
+    savePoints();
+    saveDesignPoints();
+    saveProjects();
+    currentProjectId = defaultProject.id;
+    saveCurrentProjectId();
+  } else if (!currentProjectId || !projects.some((p) => p.id === currentProjectId)) {
+    currentProjectId = projects[0].id;
+    saveCurrentProjectId();
+  }
+}
+
+function projectPoints() {
+  return points.filter((p) => p.projectId === currentProjectId);
+}
+
+function projectDesignPoints() {
+  return designPoints.filter((p) => p.projectId === currentProjectId);
 }
 
 function newId() {
@@ -252,17 +311,23 @@ const pointNotes = $('point-notes');
 const pointDialogCoords = $('point-dialog-coords');
 const pointDialogTitle = $('point-dialog-title');
 
-btnSave.addEventListener('click', () => {
-  if (!currentFix) return;
+function openSaveDialog(fix, note) {
+  pendingSaveFix = fix;
   editingPointId = null;
   pointDialogTitle.textContent = 'Save point';
   pointName.value = '';
   pointNotes.value = '';
   pointDialogCoords.textContent =
-    formatCoord(currentFix.lat, currentFix.lon) +
-    (currentFix.alt != null ? '  ·  ' + Math.round(currentFix.alt) + ' m' : '');
+    formatCoord(fix.lat, fix.lon) +
+    (fix.alt != null ? '  ·  ' + Math.round(fix.alt) + ' m' : '') +
+    (note ? '  ·  ' + note : '');
   dialog.showModal();
   setTimeout(() => pointName.focus(), 50);
+}
+
+btnSave.addEventListener('click', () => {
+  if (!currentFix) return;
+  openSaveDialog(currentFix);
 });
 
 $('point-cancel').addEventListener('click', () => dialog.close());
@@ -278,22 +343,24 @@ pointForm.addEventListener('submit', (e) => {
       p.name = name;
       p.notes = pointNotes.value.trim();
     }
-  } else {
+  } else if (pendingSaveFix) {
     points.unshift({
       id: newId(),
+      projectId: currentProjectId,
       name,
       notes: pointNotes.value.trim(),
-      lat: currentFix.lat,
-      lon: currentFix.lon,
-      alt: currentFix.alt,
-      accuracy: currentFix.accuracy,
-      quality: currentFix.quality,
-      source: currentFix.source,
+      lat: pendingSaveFix.lat,
+      lon: pendingSaveFix.lon,
+      alt: pendingSaveFix.alt,
+      accuracy: pendingSaveFix.accuracy,
+      quality: pendingSaveFix.quality,
+      source: pendingSaveFix.source,
       createdAt: new Date().toISOString(),
     });
   }
   savePoints();
   dialog.close();
+  pendingSaveFix = null;
   renderQuickList();
   renderFullList();
   if (map) renderMapMarkers();
@@ -385,58 +452,212 @@ function pointRow(p, opts) {
 
 function renderQuickList() {
   quickList.innerHTML = '';
-  const recent = points.slice(0, 5);
-  emptyHint.style.display = points.length ? 'none' : 'block';
+  const mine = projectPoints();
+  const recent = mine.slice(0, 5);
+  emptyHint.style.display = mine.length ? 'none' : 'block';
   recent.forEach((p) => quickList.appendChild(pointRow(p)));
 }
 
 function renderFullList() {
   fullList.innerHTML = '';
   const q = searchBox.value.trim().toLowerCase();
+  const mine = projectPoints();
   const filtered = q
-    ? points.filter((p) => (p.name + ' ' + (p.notes || '')).toLowerCase().includes(q))
-    : points;
+    ? mine.filter((p) => (p.name + ' ' + (p.notes || '')).toLowerCase().includes(q))
+    : mine;
   filtered.forEach((p) => fullList.appendChild(pointRow(p)));
 }
 
 searchBox.addEventListener('input', renderFullList);
 
 // ----- map -----
+// Opens centered and zoomed in on the current GPS position (like any normal
+// maps app) exactly once, when first created; afterward the user's own pan/
+// zoom is left alone — no automatic re-fitting on every render, which would
+// otherwise yank the view around. "Recenter" button snaps back on demand.
 function ensureMap() {
   if (map) return;
-  const center = currentFix ? [currentFix.lat, currentFix.lon] : (points[0] ? [points[0].lat, points[0].lon] : [0, 0]);
-  map = L.map('map', { zoomControl: true }).setView(center, points.length ? 15 : 3);
+  const mine = projectPoints();
+  const center = currentFix ? [currentFix.lat, currentFix.lon] : (mine[0] ? [mine[0].lat, mine[0].lon] : [0, 0]);
+  const zoom = currentFix ? 18 : (mine.length ? 16 : 3);
+  map = L.map('map', { zoomControl: true }).setView(center, zoom);
   L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
     maxZoom: 19,
     attribution: '&copy; OpenStreetMap contributors',
   }).addTo(map);
   markerLayer = L.layerGroup().addTo(map);
+  map.on('click', (e) => {
+    openSaveDialog(
+      { lat: e.latlng.lat, lon: e.latlng.lng, alt: null, accuracy: null, quality: null, source: 'map' },
+      'placed on map'
+    );
+  });
 }
 
 function renderMapMarkers() {
   markerLayer.clearLayers();
-  const bounds = [];
-  points.forEach((p) => {
+  projectPoints().forEach((p) => {
     const m = L.marker([p.lat, p.lon]).addTo(markerLayer);
     m.bindPopup(
       '<b>' + escapeHtml(p.name) + '</b>' +
       formatCoord(p.lat, p.lon) +
       (p.notes ? '<br>' + escapeHtml(p.notes) : '')
     );
-    bounds.push([p.lat, p.lon]);
   });
+  const transform = currentTransform();
+  if (transform) {
+    projectDesignPoints().forEach((p) => {
+      if (p.calibLat != null) return; // reference points already correspond to a real spot they were captured at
+      const t = transformToLatLon(transform, p.x, p.y);
+      L.circleMarker([t.lat, t.lon], {
+        radius: 8, color: '#60a5fa', fillColor: '#60a5fa', fillOpacity: 0.85,
+      }).addTo(markerLayer).bindPopup('<b>' + escapeHtml(p.name) + '</b> (design point)<br>' + formatCoord(t.lat, t.lon));
+    });
+  }
   if (currentFix) {
     L.circleMarker([currentFix.lat, currentFix.lon], {
       radius: 7, color: '#22c55e', fillColor: '#22c55e', fillOpacity: 0.9,
     }).addTo(markerLayer).bindPopup('You are here');
-    bounds.push([currentFix.lat, currentFix.lon]);
   }
-  if (bounds.length > 1) map.fitBounds(bounds, { padding: [30, 30] });
 }
+
+$('btn-map-add').addEventListener('click', () => {
+  if (!currentFix) { alert('No GPS fix yet.'); return; }
+  openSaveDialog(currentFix);
+});
+
+$('btn-map-recenter').addEventListener('click', () => {
+  if (!currentFix) return;
+  ensureMap();
+  map.setView([currentFix.lat, currentFix.lon], 18);
+});
 
 function escapeHtml(s) {
   return s.replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 }
+
+// ----- projects -----
+const projectPill = $('btn-project-switch');
+const projectPillName = $('project-pill-name');
+const projectDialog = $('project-dialog');
+const projectListEl = $('project-list');
+const newProjectForm = $('new-project-form');
+const newProjectNameInput = $('new-project-name');
+
+function renderProjectBar() {
+  const p = projects.find((pr) => pr.id === currentProjectId);
+  projectPillName.textContent = p ? p.name : 'Select project';
+}
+
+function refreshAllViews() {
+  renderProjectBar();
+  renderQuickList();
+  renderFullList();
+  renderLayoutList();
+  if (map) renderMapMarkers();
+}
+
+function switchProject(id) {
+  currentProjectId = id;
+  saveCurrentProjectId();
+  refreshAllViews();
+}
+
+function deleteProject(id) {
+  const p = projects.find((pr) => pr.id === id);
+  if (!p) return;
+  const ptCount = points.filter((pt) => pt.projectId === id).length;
+  const dpCount = designPoints.filter((pt) => pt.projectId === id).length;
+  if (!confirm('Delete project "' + p.name + '" and its ' + ptCount + ' point(s) and ' + dpCount + ' design point(s)? This cannot be undone.')) return;
+
+  points = points.filter((pt) => pt.projectId !== id);
+  designPoints = designPoints.filter((pt) => pt.projectId !== id);
+  projects = projects.filter((pr) => pr.id !== id);
+  savePoints();
+  saveDesignPoints();
+
+  if (!projects.length) {
+    projects.push({ id: newId(), name: 'Default Project', createdAt: new Date().toISOString() });
+  }
+  saveProjects();
+
+  if (currentProjectId === id) currentProjectId = projects[0].id;
+  saveCurrentProjectId();
+  renderProjectList();
+  refreshAllViews();
+}
+
+function renderProjectList() {
+  projectListEl.innerHTML = '';
+  projects.forEach((p) => {
+    const li = document.createElement('li');
+    li.className = 'point-item' + (p.id === currentProjectId ? ' active-project' : '');
+
+    const main = document.createElement('div');
+    main.className = 'pi-main';
+    const nameEl = document.createElement('div');
+    nameEl.className = 'pi-name';
+    nameEl.textContent = p.name + (p.id === currentProjectId ? ' (current)' : '');
+    const metaEl = document.createElement('div');
+    metaEl.className = 'pi-meta';
+    const ptCount = points.filter((pt) => pt.projectId === p.id).length;
+    const dpCount = designPoints.filter((pt) => pt.projectId === p.id).length;
+    metaEl.textContent = ptCount + ' point(s), ' + dpCount + ' design point(s)';
+    main.append(nameEl, metaEl);
+    main.addEventListener('click', () => {
+      switchProject(p.id);
+      renderProjectList();
+      projectDialog.close();
+    });
+
+    const actions = document.createElement('div');
+    actions.className = 'pi-actions';
+    const btnRename = document.createElement('button');
+    btnRename.textContent = '✎';
+    btnRename.title = 'Rename';
+    btnRename.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const name = prompt('Rename project', p.name);
+      if (name && name.trim()) {
+        p.name = name.trim();
+        saveProjects();
+        renderProjectBar();
+        renderProjectList();
+      }
+    });
+    const btnDel = document.createElement('button');
+    btnDel.textContent = '✕';
+    btnDel.className = 'danger';
+    btnDel.title = 'Delete project';
+    btnDel.addEventListener('click', (e) => {
+      e.stopPropagation();
+      deleteProject(p.id);
+    });
+    actions.append(btnRename, btnDel);
+
+    li.append(main, actions);
+    projectListEl.appendChild(li);
+  });
+}
+
+projectPill.addEventListener('click', () => {
+  renderProjectList();
+  projectDialog.showModal();
+});
+$('project-dialog-close').addEventListener('click', () => projectDialog.close());
+
+newProjectForm.addEventListener('submit', (e) => {
+  e.preventDefault();
+  const name = newProjectNameInput.value.trim();
+  if (!name) return;
+  const p = { id: newId(), name, createdAt: new Date().toISOString() };
+  projects.push(p);
+  saveProjects();
+  newProjectNameInput.value = '';
+  switchProject(p.id);
+  renderProjectList();
+  projectDialog.close();
+});
 
 // ----- export / import -----
 function download(filename, content, mime) {
@@ -450,10 +671,15 @@ function download(filename, content, mime) {
   setTimeout(() => URL.revokeObjectURL(a.href), 5000);
 }
 
+function currentProjectSlug() {
+  const p = projects.find((pr) => pr.id === currentProjectId);
+  return (p ? p.name : 'rtk-points').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'rtk-points';
+}
+
 function toGeoJSON() {
   return JSON.stringify({
     type: 'FeatureCollection',
-    features: points.map((p) => ({
+    features: projectPoints().map((p) => ({
       type: 'Feature',
       geometry: { type: 'Point', coordinates: [p.lon, p.lat, p.alt || 0] },
       properties: {
@@ -465,7 +691,7 @@ function toGeoJSON() {
 }
 
 function toGPX() {
-  const wpts = points.map((p) => `  <wpt lat="${p.lat}" lon="${p.lon}">
+  const wpts = projectPoints().map((p) => `  <wpt lat="${p.lat}" lon="${p.lon}">
     ${p.alt != null ? `<ele>${p.alt}</ele>` : ''}
     <name>${escapeXml(p.name)}</name>
     ${p.notes ? `<desc>${escapeXml(p.notes)}</desc>` : ''}
@@ -480,7 +706,7 @@ function escapeXml(s) {
 
 function toCSV() {
   const header = 'name,lat,lon,alt,accuracy_m,quality,source,notes,createdAt';
-  const rows = points.map((p) => [
+  const rows = projectPoints().map((p) => [
     p.name, p.lat, p.lon, p.alt ?? '', p.accuracy ?? '', p.quality ?? '', p.source, p.notes || '', p.createdAt,
   ].map(csvField).join(','));
   return [header, ...rows].join('\n');
@@ -491,9 +717,9 @@ function csvField(v) {
   return /[",\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
 }
 
-$('btn-export-geojson').addEventListener('click', () => download('rtk-points.geojson', toGeoJSON(), 'application/geo+json'));
-$('btn-export-gpx').addEventListener('click', () => download('rtk-points.gpx', toGPX(), 'application/gpx+xml'));
-$('btn-export-csv').addEventListener('click', () => download('rtk-points.csv', toCSV(), 'text/csv'));
+$('btn-export-geojson').addEventListener('click', () => download(currentProjectSlug() + '.geojson', toGeoJSON(), 'application/geo+json'));
+$('btn-export-gpx').addEventListener('click', () => download(currentProjectSlug() + '.gpx', toGPX(), 'application/gpx+xml'));
+$('btn-export-csv').addEventListener('click', () => download(currentProjectSlug() + '.csv', toCSV(), 'text/csv'));
 
 $('import-file').addEventListener('change', async (e) => {
   const file = e.target.files[0];
@@ -508,6 +734,7 @@ $('import-file').addEventListener('change', async (e) => {
       const [lon, lat, alt] = f.geometry.coordinates;
       points.unshift({
         id: newId(),
+        projectId: currentProjectId,
         name: f.properties?.name || 'Imported point',
         notes: f.properties?.notes || '',
         lat, lon, alt: alt || null,
@@ -530,9 +757,10 @@ $('import-file').addEventListener('change', async (e) => {
 });
 
 $('btn-clear-all').addEventListener('click', () => {
-  if (!points.length) return;
-  if (!confirm('Delete all ' + points.length + ' saved points? This cannot be undone.')) return;
-  points = [];
+  const mine = projectPoints();
+  if (!mine.length) return;
+  if (!confirm('Delete all ' + mine.length + ' saved points in this project? This cannot be undone.')) return;
+  points = points.filter((p) => p.projectId !== currentProjectId);
   savePoints();
   renderQuickList();
   renderFullList();
@@ -616,7 +844,7 @@ function transformToLatLon(transform, x, y) {
 }
 
 function currentTransform() {
-  const calibrated = designPoints.filter((p) => p.calibLat != null && p.calibLon != null);
+  const calibrated = projectDesignPoints().filter((p) => p.calibLat != null && p.calibLon != null);
   return fitTransform(calibrated);
 }
 
@@ -845,6 +1073,7 @@ async function importLayoutFile(file) {
   rawPoints.forEach((p) => {
     designPoints.push({
       id: newId(),
+      projectId: currentProjectId,
       name: p.name,
       x: p.x * scale, y: p.y * scale, z: p.z * scale, // stored in meters internally
       xDisplay: p.x, yDisplay: p.y, zDisplay: p.z, unitsDisplay: chosenUnits,
@@ -889,10 +1118,11 @@ function clearCalibration(id) {
 
 function renderLayoutList() {
   layoutList.innerHTML = '';
-  layoutEmptyHint.style.display = designPoints.length ? 'none' : 'block';
+  const mine = projectDesignPoints();
+  layoutEmptyHint.style.display = mine.length ? 'none' : 'block';
 
   const transform = currentTransform();
-  const calibratedCount = designPoints.filter((p) => p.calibLat != null).length;
+  const calibratedCount = mine.filter((p) => p.calibLat != null).length;
 
   if (calibratedCount < 2) {
     calibBanner.textContent = `${calibratedCount}/2 reference points captured — capture at least 2 (tap "Set Here" while standing on that point) to enable stakeout.`;
@@ -903,7 +1133,7 @@ function renderLayoutList() {
     calibBanner.className = 'hint small calibrated';
   }
 
-  designPoints.forEach((p) => {
+  mine.forEach((p) => {
     const li = document.createElement('li');
     li.className = 'point-item design-point';
 
@@ -982,9 +1212,10 @@ function deleteDesignPoint(id) {
 }
 
 $('btn-clear-layout').addEventListener('click', () => {
-  if (!designPoints.length) return;
-  if (!confirm('Delete all ' + designPoints.length + ' design points and reference calibration? This cannot be undone.')) return;
-  designPoints = [];
+  const mine = projectDesignPoints();
+  if (!mine.length) return;
+  if (!confirm('Delete all ' + mine.length + ' design points and reference calibration in this project? This cannot be undone.')) return;
+  designPoints = designPoints.filter((p) => p.projectId !== currentProjectId);
   saveDesignPoints();
   renderLayoutList();
 });
@@ -1136,5 +1367,7 @@ if ('serviceWorker' in navigator) {
 }
 
 // ----- init -----
+ensureProjects();
+renderProjectBar();
 renderQuickList();
 startGeolocation();

@@ -69,23 +69,56 @@ path above gives you the same accuracy with zero extra config here.
 
 ## Features
 
+- **Projects** — everything (saved points, layout design points, and
+  calibration) is scoped to a project. Switch, rename, or delete projects
+  from the pill at the top of every screen. Keeps separate job sites from
+  mixing their points or their Layout calibration together. See below.
 - **Save** — live fix card (coordinates, altitude, accuracy, sat count,
   fix-quality badge) with one big button to drop a named pin.
 - **Points** — searchable list of every saved point, with live distance
   and compass direction from your current position, tap-to-copy
   coordinates, edit, delete, and a one-tap "Navigate" button that opens
   your phone's map app via a `geo:` link.
-- **Map** — all points plotted on an OpenStreetMap view (Leaflet, bundled
-  locally — no CDN dependency). Tiles are cached as you view them, so
+- **Map** — opens centered and zoomed in on your current GPS position
+  (like any normal maps app), all points plotted on an OpenStreetMap view
+  (Leaflet, bundled locally — no CDN dependency). Tap anywhere on the map
+  to drop a point at that spot, or use the **+** button to drop one at
+  your current position; a recenter button snaps back to your location
+  after you've panned around. Tiles are cached as you view them, so
   previously visited areas keep working offline; brand-new areas still
   need connectivity for their first load, same as any web map.
 - **Layout** — import CAD design points (no real-world coordinates needed)
   and calibrate them to GPS on site for stakeout. See below.
-- **Backup** — export everything as GeoJSON, GPX (for Garmin/other GPS
-  tools), or CSV; import a previously exported GeoJSON file back in.
+- **Backup** — export the current project's points as GeoJSON, GPX (for
+  Garmin/other GPS tools), or CSV; import a previously exported GeoJSON
+  file back into the current project.
 - Fully offline-capable app shell via a service worker — once installed,
   opening the app, dropping pins, and browsing your list needs no network
   at all.
+
+## Projects
+
+Tap the project pill (top of every screen, next to the folder icon) to
+switch projects, rename one, delete one, or add a new one. Whatever
+project is active determines:
+
+- which saved points show up on Save / Points / Map, and which ones get
+  exported or cleared
+- which Layout design points and reference-point calibration are active —
+  since a calibration transform only makes sense for one physical site,
+  each project gets its own, so you can juggle multiple job sites (or a
+  foundation and, say, a septic layout on the same property) without
+  their corner points and stakeout math bleeding into each other
+
+Deleting a project deletes its points and design points with it (you'll
+get a count and a confirmation first) — export anything you want to keep
+before deleting. The app always keeps at least one project around; if you
+delete the last one, a fresh "Default Project" is created automatically.
+
+On first install with no existing data you start in a "Default Project";
+if you'd already been using the app before projects existed, your
+existing points/design points are kept and moved into a project called
+"My Points" automatically — nothing is lost.
 
 ## Layout: staking out a foundation from a CAD file
 
@@ -145,12 +178,17 @@ Layout list positions against reality before you commit to staking.
 
 ## Data format
 
+Projects are stored under `rtk-projects-v1` as a JSON array of
+`{ id, name, createdAt }`; the active one is `rtk-current-project-v1`
+(just an id string).
+
 Points are stored under the `rtk-points-v1` key in `localStorage` as a
 JSON array of:
 
 ```json
 {
   "id": "uuid",
+  "projectId": "uuid",
   "name": "Property corner NE",
   "notes": "optional",
   "lat": 40.0,
@@ -163,6 +201,9 @@ JSON array of:
 }
 ```
 
+`source` is `"phone"` (phone GPS), `"ble"` (direct Bluetooth NMEA),
+`"map"` (manually placed by tapping the map), or `"import"`.
+
 `quality` follows the NMEA GGA fix-quality codes (4 = RTK Fixed, 5 = RTK
 Float, 2 = DGPS, 1 = GPS, `null` = unknown/phone-GPS-only).
 
@@ -172,6 +213,7 @@ in meters internally regardless of import units:
 ```json
 {
   "id": "uuid",
+  "projectId": "uuid",
   "name": "FOUNDATION-1",
   "x": 0, "y": 0, "z": 0,
   "calibLat": 40.0, "calibLon": -105.0, "calibAccuracy": 0.02, "calibTs": 1752600000000,
@@ -183,7 +225,7 @@ A point with `calibLat`/`calibLon` set is a captured reference (calibration)
 point; the rest are design points located purely via the fitted transform,
 recomputed live from whichever points currently have calibration data.
 
-Back up regularly with the GeoJSON export (Points tab data only — Layout
-design points aren't yet included in export/import, since they're
-inherently tied to a specific site's calibration) — `localStorage` is
-per-browser and can be cleared by the OS or by clearing site data.
+Back up regularly with the GeoJSON export (current project's saved points
+only — Layout design points aren't yet included in export/import, since
+they're inherently tied to a specific site's calibration) — `localStorage`
+is per-browser and can be cleared by the OS or by clearing site data.
