@@ -1,0 +1,181 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
+<title>RTK Point Mapper</title>
+<meta name="theme-color" content="#0b1220">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="icon.svg">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<link rel="stylesheet" href="vendor/leaflet/leaflet.css">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<header class="topbar">
+  <h1>RTK Point Mapper</h1>
+  <button id="btn-settings" class="icon-btn" title="Settings" aria-label="Settings">&#9881;</button>
+</header>
+
+<main>
+  <!-- ===== SAVE TAB ===== -->
+  <section id="tab-save" class="tab active">
+    <div class="fix-card">
+      <div class="fix-row">
+        <span class="fix-badge" id="fix-badge">no fix</span>
+        <span class="fix-source" id="fix-source">phone GPS</span>
+      </div>
+      <div class="coords" id="coords">--.------, --.------</div>
+      <div class="fix-details">
+        <div><span class="label">Alt</span><span id="fix-alt">--</span></div>
+        <div><span class="label">Acc</span><span id="fix-acc">--</span></div>
+        <div><span class="label">Sats</span><span id="fix-sats">--</span></div>
+      </div>
+    </div>
+
+    <button id="btn-save" class="big-button" disabled>Drop Pin Here</button>
+
+    <div class="quick-list" id="quick-list-wrap">
+      <h2>Recent points</h2>
+      <ul id="quick-list" class="point-list"></ul>
+      <p class="empty-hint" id="empty-hint">No points yet — get a fix, then tap "Drop Pin Here".</p>
+    </div>
+  </section>
+
+  <!-- ===== LIST TAB ===== -->
+  <section id="tab-list" class="tab">
+    <div class="list-toolbar">
+      <input id="search-box" type="search" placeholder="Search points...">
+    </div>
+    <ul id="full-list" class="point-list"></ul>
+  </section>
+
+  <!-- ===== MAP TAB ===== -->
+  <section id="tab-map" class="tab">
+    <div id="map"></div>
+  </section>
+
+  <!-- ===== LAYOUT TAB (design points imported from CAD, calibrated on site) ===== -->
+  <section id="tab-layout" class="tab">
+    <p class="hint">
+      Import corner points from a CAD file (no real-world coordinates needed).
+      Then walk to two or more of those points on site, tap <b>Set Here</b> at
+      each with the RTK, and every other point gets a live GPS position you
+      can stake out to.
+    </p>
+
+    <div class="settings-row button-row">
+      <label>Local units
+        <select id="import-units">
+          <option value="ft" selected>Feet</option>
+          <option value="m">Meters</option>
+          <option value="in">Inches</option>
+        </select>
+      </label>
+      <label for="layout-import-file" class="secondary-button file-label">Import DXF / CSV</label>
+      <input id="layout-import-file" type="file" accept=".dxf,.csv,.txt,text/plain" hidden>
+    </div>
+
+    <p id="calib-banner" class="hint small"></p>
+
+    <ul id="layout-list" class="point-list"></ul>
+    <p class="empty-hint" id="layout-empty-hint">No design points yet — import a DXF or CSV file.</p>
+
+    <div class="settings-row">
+      <button id="btn-clear-layout" class="danger-button">Clear all design points</button>
+    </div>
+  </section>
+
+  <!-- ===== SETTINGS TAB (hidden, opened via gear icon) ===== -->
+  <section id="tab-settings" class="tab">
+    <h2>Position source</h2>
+    <p class="hint">
+      For RTK-grade accuracy, pair the Facet with your phone as a Bluetooth GPS
+      (mock-location) source using an app like "Bluetooth GPS" or "GPS Connector" —
+      then this page's normal phone GPS reading will already be RTK-corrected.
+    </p>
+
+    <div class="settings-row">
+      <button id="btn-ble-connect" class="secondary-button">Connect to Facet via Bluetooth (experimental)</button>
+      <p class="hint small">
+        Attempts a direct Web Bluetooth link to read NMEA and show true fix quality
+        (RTK Fixed / RTK Float) instead of relying on the phone's GPS chip. Requires
+        Chrome on Android and the Facet's Bluetooth Protocol set to BLE or Dual in its
+        system menu. If it can't find the right service, it will fail harmlessly —
+        phone-GPS mode keeps working either way. See README for details and how to
+        supply a custom service/characteristic UUID if your firmware differs.
+      </p>
+      <div class="settings-row" id="ble-uuid-row">
+        <label>Service UUID <input id="ble-service-uuid" type="text" placeholder="6e400001-b5a3-f393-e0a9-e50e24dcca9e"></label>
+        <label>TX (notify) characteristic UUID <input id="ble-tx-uuid" type="text" placeholder="6e400003-b5a3-f393-e0a9-e50e24dcca9e"></label>
+      </div>
+      <p id="ble-status" class="hint small"></p>
+    </div>
+
+    <h2>Backup</h2>
+    <div class="settings-row button-row">
+      <button id="btn-export-geojson" class="secondary-button">Export GeoJSON</button>
+      <button id="btn-export-gpx" class="secondary-button">Export GPX</button>
+      <button id="btn-export-csv" class="secondary-button">Export CSV</button>
+    </div>
+    <div class="settings-row">
+      <label for="import-file" class="secondary-button file-label">Import GeoJSON</label>
+      <input id="import-file" type="file" accept=".json,.geojson,application/geo+json,application/json" hidden>
+    </div>
+
+    <h2>Danger zone</h2>
+    <div class="settings-row">
+      <button id="btn-clear-all" class="danger-button">Delete all points</button>
+    </div>
+
+    <p class="version">RTK Point Mapper &middot; all data stays on this device</p>
+  </section>
+</main>
+
+<nav class="tabbar">
+  <button class="tab-btn active" data-tab="tab-save">Save</button>
+  <button class="tab-btn" data-tab="tab-list">Points</button>
+  <button class="tab-btn" data-tab="tab-map">Map</button>
+  <button class="tab-btn" data-tab="tab-layout">Layout</button>
+</nav>
+
+<!-- ===== Save/Edit point modal ===== -->
+<dialog id="point-dialog">
+  <form method="dialog" id="point-form">
+    <h2 id="point-dialog-title">Save point</h2>
+    <label>Name
+      <input id="point-name" type="text" placeholder="e.g. Property corner NE" required autocomplete="off">
+    </label>
+    <label>Notes
+      <textarea id="point-notes" rows="2" placeholder="optional"></textarea>
+    </label>
+    <div class="point-dialog-coords" id="point-dialog-coords"></div>
+    <div class="dialog-actions">
+      <button type="button" id="point-cancel" class="secondary-button">Cancel</button>
+      <button type="submit" id="point-confirm" class="big-button small">Save</button>
+    </div>
+  </form>
+</dialog>
+
+<!-- ===== Stakeout modal ===== -->
+<dialog id="stakeout-dialog">
+  <h2 id="stakeout-name">Stakeout</h2>
+  <div class="stakeout-arrow-wrap">
+    <div class="stakeout-arrow" id="stakeout-arrow">&#8593;</div>
+  </div>
+  <div class="stakeout-distance" id="stakeout-distance">-- m</div>
+  <div class="stakeout-bearing" id="stakeout-bearing">--&deg;</div>
+  <div class="stakeout-delta" id="stakeout-delta"></div>
+  <p class="hint small" id="stakeout-note"></p>
+  <div class="dialog-actions">
+    <button type="button" id="stakeout-close" class="big-button small">Done</button>
+  </div>
+</dialog>
+
+<script src="vendor/leaflet/leaflet.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
