@@ -1,6 +1,6 @@
 'use strict';
 
-const APP_CACHE = 'rtk-mapper-shell-v1';
+const APP_CACHE = 'rtk-mapper-shell-v2';
 const TILE_CACHE = 'rtk-mapper-tiles-v1';
 
 const APP_SHELL = [
